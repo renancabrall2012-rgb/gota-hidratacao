@@ -1,0 +1,27 @@
+GOTA — aplicativo de hidratação para iPhone
+
+FUNÇÕES INCLUÍDAS
+• Meta inicial: 2.000 ml; avisos das 07:00 às 22:00, a cada 60 minutos.
+• Lembretes inteligentes quando o consumo está abaixo do ritmo proporcional à hora.
+• Registro rápido de 150, 250 ou 500 ml ou valor personalizado.
+• Exclusão de registros, painel de progresso, gráfico dos últimos 7 dias, exportação JSON.
+• Dados guardados localmente no aparelho, pelo navegador/app instalado.
+• PWA instalável pela tela inicial do iPhone (Safari + HTTPS).
+
+ATENÇÃO — NOTIFICAÇÕES
+Notificações enquanto o app está aberto: funcionam quando o navegador e o aparelho permitem.
+Notificações com o aplicativo fechado: exigem hospedagem HTTPS, servidor Node.js continuamente ligado, chaves VAPID e permissão do usuário no app instalado na tela inicial. O backend opcional está no arquivo server.js. Sem esse servidor, a função não está ativa.
+Para iPhone, use iOS 16.4 ou posterior e instale pelo Safari: Compartilhar > Adicionar à Tela de Início > Abrir Gota > Ajustes > Ativar notificações.
+
+PUBLICAÇÃO COM PUSH
+1. Tenha um servidor Node.js que não hiberne e hospede-o sob HTTPS.
+2. Envie esta pasta ao servidor.
+3. Rode `npm install`.
+4. Rode `npx web-push generate-vapid-keys` e copie as chaves para .env com base no .env.example.
+5. Rode `npm start` atrás de um proxy HTTPS. Verifique a persistência do arquivo devices.json.
+6. Abra a URL HTTPS pelo Safari do iPhone, instale na tela inicial e permita notificações em Ajustes.
+
+IMPORTANTE
+A rotina inteligente é baseada em ritmo diário simples. É um lembrete de hábitos, não orientação médica.
+A meta e os horários são editáveis. Caso sejam apagados os dados do Safari, os registros locais podem ser perdidos.
+Para uso sem servidor, a interface pode ser testada em localhost no computador, mas o iPhone exige HTTPS para instalar a PWA com notificações.
