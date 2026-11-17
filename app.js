@@ -91,3 +91,46 @@ $('exportButton').onclick=()=>{const blob=new Blob([JSON.stringify({exportedAt:n
 $('greeting').textContent=(new Date().getHours()<12?'Bom dia':new Date().getHours()<18?'Boa tarde':'Boa noite')+'! 👋';render();setInterval(notifyIfNeeded,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)notifyIfNeeded()});
 // Ao abrir o aplicativo, atualizar o consumo no servidor mesmo sem novos registros.
 syncServer();
+
+
+// Botao de teste: usa a mesma inscricao push do iPhone; nao modifica os registros.
+const testButton = document.createElement('button');
+testButton.type = 'button';
+testButton.id = 'testPushNow';
+testButton.className = 'btn secondary';
+testButton.textContent = '🔔 Enviar notificação de teste';
+testButton.style.marginTop = '12px';
+$('notificationStatus').insertAdjacentElement('afterend', testButton);
+testButton.onclick = async () => {
+  testButton.disabled = true;
+  const oldLabel = testButton.textContent;
+  testButton.textContent = 'Enviando teste...';
+  try {
+    const result = await postDevice('/api/test', {deviceId: deviceId()});
+    if (result.ok) {
+      $('notificationStatus').textContent = '✅ Gateway aceitou a notificação de teste (HTTP ' + result.gatewayStatus + '). Confira a Central de Notificações do iPhone.';
+      toast('Teste enviado! 🔔');
+    } else throw Error(result.reason || 'Falha no envio');
+  } catch (err) {
+    $('notificationStatus').textContent = '⚠️ O servidor não confirmou o envio. ' + String(err.message || err);
+    toast('Falha no teste 🔔');
+  } finally {
+    testButton.disabled = false;
+    testButton.textContent = oldLabel;
+  }
+};
+const diagnosticButton = document.createElement('button');
+diagnosticButton.type = 'button';
+diagnosticButton.className = 'btn secondary';
+diagnosticButton.textContent = '🔍 Diagnosticar lembretes';
+diagnosticButton.style.marginTop = '8px';
+testButton.insertAdjacentElement('afterend', diagnosticButton);
+diagnosticButton.onclick = async () => {
+  diagnosticButton.disabled = true;
+  try {
+    const d = await postDevice('/api/diagnostic', {deviceId: deviceId()});
+    const reasons = {sem_inscricao_push:'Sem inscrição push no servidor', antes_do_horario:'Fora do horário: cedo demais', depois_do_horario:'Fora do horário: tarde demais', meta_atingida:'Meta diária alcançada', no_ritmo:'Consumo dentro do ritmo da meta', intervalo_nao_cumprido:'Aguardando intervalo desde o último lembrete', deveria_enviar:'Está abaixo do ritmo; próximo agendamento deveria tentar enviar', configuracao_ausente:'Configurações incompletas'};
+    $('notificationStatus').textContent = `🔍 ${reasons[d.reason] || d.reason}. Servidor: ${d.total} ml consumidos; previsto: ${d.expected ?? '?'} ml. Inscrição push: ${d.hasSubscription ? 'sim' : 'não'}.`;
+  } catch(err) { $('notificationStatus').textContent = '⚠️ Diagnóstico indisponível: ' + String(err.message || err); }
+  finally { diagnosticButton.disabled = false; }
+};
