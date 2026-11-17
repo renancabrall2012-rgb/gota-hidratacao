@@ -7,9 +7,54 @@ const localDay=(date=new Date())=>`${date.getFullYear()}-${String(date.getMonth(
 const fromDay=d=>new Date(`${d}T12:00:00`);
 const todayLogs=()=>state.logs.filter(x=>localDay(new Date(x.at))===localDay());
 const todayTotal=()=>todayLogs().reduce((a,x)=>a+x.ml,0);
-const save=()=>{localStorage.setItem(STORAGE,JSON.stringify(state));syncServer().catch(()=>{})};
-let syncTimer;async function syncServer(){clearTimeout(syncTimer);syncTimer=setTimeout(async()=>{try{await fetch('./api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deviceId:deviceId(),date:localDay(),total:todayTotal(),settings:{goal:state.goal,start:state.start,end:state.end,interval:state.interval},timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})})}catch{}},500)}
-function deviceId(){let id=localStorage.getItem('gota-device');if(!id){id=crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random();localStorage.setItem('gota-device',id)}return id}
+const API = 'https://gota-notificacoes.renancabrall2012.workers.dev';
+const save=()=>{localStorage.setItem(STORAGE,JSON.stringify(state));syncServer()};
+let registered=false, syncTimer;
+function deviceId(){
+  let id=localStorage.getItem('gota-device');
+  if(!id || !/^[A-Za-z0-9-]{10,100}$/.test(id)){
+    id=crypto.randomUUID(); localStorage.setItem('gota-device',id);
+  }
+  return id;
+}
+function deviceSecret(){
+  let secret=localStorage.getItem('gota-device-secret');
+  if(!secret){
+    const random=new Uint8Array(32);crypto.getRandomValues(random);
+    secret=Array.from(random,b=>b.toString(16).padStart(2,'0')).join('');
+    localStorage.setItem('gota-device-secret',secret);
+  }
+  return secret;
+}
+async function registerDevice(){
+  if(registered)return;
+  const result=await fetch(`${API}/api/register`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({deviceId:deviceId(),deviceSecret:deviceSecret()})
+  });
+  if(!result.ok)throw Error('Nao foi possivel registrar este iPhone ('+result.status+')');
+  registered=true;
+}
+function apiBody(){
+  return {deviceId:deviceId(),date:localDay(),total:todayTotal(),
+    settings:{goal:state.goal,start:state.start,end:state.end,interval:state.interval},
+    timezone:Intl.DateTimeFormat().resolvedOptions().timeZone};
+}
+async function postDevice(path,data){
+  await registerDevice();
+  const result=await fetch(`${API}${path}`,{
+    method:'POST',headers:{'Content-Type':'application/json',
+      Authorization:`Bearer ${deviceSecret()}`},body:JSON.stringify(data)
+  });
+  if(!result.ok)throw Error(path+' falhou ('+result.status+')');
+  return result.json();
+}
+function syncServer(){
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(()=>{
+    postDevice('/api/sync',apiBody()).catch(e=>console.warn('Sincronizacao adiada',e));
+  },700);
+}
 const minutes=t=>{const [h,m]=t.split(':').map(Number);return h*60+m};
 const nowMinutes=()=>{let d=new Date();return d.getHours()*60+d.getMinutes()};
 function targetUntilNow(){const n=nowMinutes(),s=minutes(state.start),e=minutes(state.end);return Math.min(state.goal,Math.max(0,Math.round(state.goal*(n-s)/(e-s))))}
@@ -25,8 +70,24 @@ $('settingsToggle').onclick=openSettings;$('changeGoal').onclick=()=>{if($('sett
 async function registerSW(){if('serviceWorker' in navigator){try{return await navigator.serviceWorker.register('./sw.js')}catch(e){console.warn(e)}}}
 let swReady=registerSW();
 function pushBase64ToUint8Array(base64){const padding='='.repeat((4-base64.length%4)%4);const raw=atob((base64+padding).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
-async function subscribePush(reg){try{const cfg=await fetch('./api/config');if(!cfg.ok)throw Error('backend indisponível');const {publicKey}=await cfg.json();if(!publicKey)return false;let sub=await reg.pushManager.getSubscription();if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:pushBase64ToUint8Array(publicKey)});const res=await fetch('./api/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deviceId:deviceId(),date:localDay(),total:todayTotal(),subscription:sub,settings:{goal:state.goal,start:state.start,end:state.end,interval:state.interval},timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});return res.ok}catch(e){console.warn('Push não configurado',e);return false}}
+async function subscribePush(reg){
+  try{
+    const cfg=await fetch(`${API}/api/config`);
+    if(!cfg.ok)throw Error('Servidor indisponivel');
+    const {publicKey}=await cfg.json();
+    if(!publicKey)throw Error('Chave publica ausente');
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,
+      applicationServerKey:pushBase64ToUint8Array(publicKey)});
+    await postDevice('/api/sync',apiBody());
+    await postDevice('/api/subscribe',{deviceId:deviceId(),subscription:sub.toJSON()});
+    localStorage.setItem('gota-push-enabled','1');
+    return true;
+  }catch(e){console.warn('Push nao configurado',e);return false;}
+}
 $('enableNotifications').onclick=async()=>{if(!('Notification' in window)){toast('Este navegador não oferece notificações.');return}try{const allowed=await Notification.requestPermission();if(allowed!=='granted'){toast('Notificações não autorizadas.');return}const reg=await swReady;if(reg){const ok=await subscribePush(reg);$('notificationStatus').textContent=ok?'Notificações push ativadas. Você pode receber lembretes mesmo com o aplicativo fechado.':'Notificações autorizadas. Os avisos funcionam enquanto o app estiver aberto; para avisos com ele fechado, é preciso publicar e configurar o servidor push.';}toast('Permissão de notificações concedida 🔔')}catch(e){toast('Não foi possível ativar. Instale na tela inicial do iPhone e tente novamente.')}};
-async function notifyIfNeeded(){render();if(!reminderDue())return;if(typeof Notification==='undefined'||Notification.permission!=='granted')return;const missing=Math.max(0,targetUntilNow()-todayTotal());const body=`Um gole agora ajuda a alcançar sua meta de ${fmt(state.goal)} ml. Você está ${fmt(missing)} ml abaixo do ritmo planejado.`;try{const reg=await swReady;if(reg&&reg.showNotification)await reg.showNotification('💧 Gota: hora de beber água!',{body,icon:'./icon-192.png',badge:'./icon-192.png',tag:'gota-lembrete'});else new Notification('💧 Hora de beber água!',{body});state.lastNotification=new Date().toISOString();save();render()}catch(e){console.warn(e)}}
+async function notifyIfNeeded(){render();if(localStorage.getItem('gota-push-enabled')==='1')return;if(!reminderDue())return;if(typeof Notification==='undefined'||Notification.permission!=='granted')return;const missing=Math.max(0,targetUntilNow()-todayTotal());const body=`Um gole agora ajuda a alcançar sua meta de ${fmt(state.goal)} ml. Você está ${fmt(missing)} ml abaixo do ritmo planejado.`;try{const reg=await swReady;if(reg&&reg.showNotification)await reg.showNotification('💧 Gota: hora de beber água!',{body,icon:'./icon-192.png',badge:'./icon-192.png',tag:'gota-lembrete'});else new Notification('💧 Hora de beber água!',{body});state.lastNotification=new Date().toISOString();save();render()}catch(e){console.warn(e)}}
 $('exportButton').onclick=()=>{const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),...state},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`gota-registros-${localDay()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
 $('greeting').textContent=(new Date().getHours()<12?'Bom dia':new Date().getHours()<18?'Boa tarde':'Boa noite')+'! 👋';render();setInterval(notifyIfNeeded,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)notifyIfNeeded()});
+// Ao abrir o aplicativo, atualizar o consumo no servidor mesmo sem novos registros.
+syncServer();
